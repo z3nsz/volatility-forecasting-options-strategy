@@ -1,0 +1,18 @@
+# Data: downloaded, regenerable, and (for WRDS) licensed. Never commit.
+data/raw/
+data/processed/
+*.csv
+*.parquet
+# Exception: small hand-built reference files (FOMC/CPI dates) are ours to publish
+!reference/*.csv
+
+# Python / Jupyter clutter
+__pycache__/
+.venv/
+.ipynb_checkpoints/
+
+# Credentials
+.env
+
+# macOS
+.DS_Store
