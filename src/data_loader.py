@@ -15,6 +15,9 @@ RAW_DIR = Path("data/raw")
 CBOE_URL = "https://cdn.cboe.com/api/global/us_indices/daily_prices/{name}_History.csv"
 CBOE_INDEXES = ["VIX", "VIX9D", "VIX3M", "VVIX", "SKEW", "OVX"]
 
+# VVIX exists from 2006 but has ~60 missing days that year, so start it later
+CBOE_START = {"VVIX": "2007-01-01"}
+
 # Saved exactly as FRED publishes them. The 1-business-day publication lag
 # is applied later, when the datasets are aligned.
 FRED_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv?id={series}"
@@ -97,3 +100,44 @@ def download_cpi_release_dates(start="2004-01-01"):
     RAW_DIR.mkdir(parents=True, exist_ok=True)
     df.to_csv(RAW_DIR / "cpi_release_dates.csv", index=False)
     return df
+
+
+def load_cboe_close(name):
+    df = pd.read_csv(RAW_DIR / f"{name.lower()}.csv", index_col=0, parse_dates=True)
+    # VIX, VIX9D and VIX3M come with OHLC columns; the others have one value column
+    column = "CLOSE" if "CLOSE" in df.columns else name
+    series = df[column].rename(name.lower())
+    if name in CBOE_START:
+        series = series[series.index >= CBOE_START[name]]
+    return series
+
+
+def align_spy_and_cboe():
+    spy = pd.read_csv(RAW_DIR / "spy.csv", index_col=0, parse_dates=True)
+
+    # Scale open/high/low by the same dividend adjustment as the close, so an
+    # ex-dividend gap doesn't look like an overnight move
+    adj_factor = spy["Adj Close"] / spy["Close"]
+    daily = pd.DataFrame({
+        "open": spy["Open"] * adj_factor,
+        "high": spy["High"] * adj_factor,
+        "low": spy["Low"] * adj_factor,
+        "close": spy["Adj Close"],
+    })
+
+    # Left join on SPY's dates: index values on market holidays are dropped
+    for name in CBOE_INDEXES:
+        daily = daily.join(load_cboe_close(name))
+
+    # VIX defines implied variance (half of our target), so it is never filled.
+    # Rows without it, e.g. today before CBOE posts its file, are dropped.
+    daily = daily.dropna(subset=["vix"])
+
+    # Other indexes: carry yesterday's value over at most one missing day.
+    # Uses only past data; longer gaps stay missing rather than being invented.
+    for column in ["vix9d", "vix3m", "vvix", "skew", "ovx"]:
+        before = daily[column].isna().sum()
+        daily[column] = daily[column].ffill(limit=1)
+        print(f"{column}: forward-filled {before - daily[column].isna().sum()} day(s)")
+
+    return daily
