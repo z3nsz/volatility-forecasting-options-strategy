@@ -51,6 +51,16 @@ def download_spy(start="2004-01-01"):
     return spy
 
 
+def download_move(start="2004-01-01"):
+    # MOVE (Treasury option volatility) is published by ICE, not CBOE
+    move = yf.Ticker("^MOVE").history(start=start)
+    move.index = move.index.tz_localize(None).normalize()
+
+    RAW_DIR.mkdir(parents=True, exist_ok=True)
+    move.to_csv(RAW_DIR / "move.csv")
+    return move
+
+
 def download_cboe_index(name):
     df = pd.read_csv(
         CBOE_URL.format(name=name),
@@ -178,6 +188,11 @@ def build_daily_dataset():
         values = load_fred_lagged(series)
         # For each SPY day, take the latest value already public by then
         daily[series.lower()] = values.reindex(daily.index, method="ffill")
+
+    # ICE's publication time for the MOVE close isn't documented, so assume it
+    # is only known the next trading day. Then carry over at most one missing day.
+    move = pd.read_csv(RAW_DIR / "move.csv", index_col=0, parse_dates=True)["Close"]
+    daily["move"] = move.reindex(daily.index).shift(1).ffill(limit=1)
 
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
     daily.to_csv(PROCESSED_DIR / "daily.csv")
