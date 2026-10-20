@@ -1,7 +1,13 @@
+import os
 from pathlib import Path
 
 import pandas as pd
+import requests
 import yfinance as yf
+from dotenv import load_dotenv
+
+# Reads FRED_API_KEY from .env, so the key never appears in the code
+load_dotenv()
 
 RAW_DIR = Path("data/raw")
 
@@ -64,3 +70,30 @@ def download_fred_series(series):
 
 def download_all_fred():
     return {series: download_fred_series(series) for series in FRED_SERIES}
+
+
+def download_cpi_release_dates(start="2004-01-01"):
+    response = requests.get(
+        "https://api.stlouisfed.org/fred/release/dates",
+        params={
+            "release_id": 10,  # FRED's id for the BLS Consumer Price Index release
+            "realtime_start": start,
+            "api_key": os.environ["FRED_API_KEY"],
+            "file_type": "json",
+            "limit": 10000,
+        },
+        timeout=30,
+    )
+    response.raise_for_status()
+
+    dates = pd.to_datetime([row["date"] for row in response.json()["release_dates"]])
+    df = pd.DataFrame({"date": dates})
+
+    # Each February BLS also publishes revised seasonal factors a few days
+    # before the January CPI report. Only the CPI report moves markets, and
+    # it is always the later of the two, so keep the last date per month.
+    df = df.groupby(df["date"].dt.to_period("M")).tail(1)
+
+    RAW_DIR.mkdir(parents=True, exist_ok=True)
+    df.to_csv(RAW_DIR / "cpi_release_dates.csv", index=False)
+    return df
