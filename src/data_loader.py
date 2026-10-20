@@ -1,15 +1,25 @@
 import os
+import warnings
 from pathlib import Path
 
 import pandas as pd
 import requests
 import yfinance as yf
 from dotenv import load_dotenv
+from pandas.tseries.holiday import USFederalHolidayCalendar
+from pandas.tseries.offsets import CustomBusinessDay
 
 # Reads FRED_API_KEY from .env, so the key never appears in the code
 load_dotenv()
 
 RAW_DIR = Path("data/raw")
+PROCESSED_DIR = Path("data/processed")
+
+# Signals are computed at 4:30pm ET, after VIX's 4:15pm close and after the
+# Fed posts the previous business day's H.15 rates (~4:15pm). So on day t the
+# newest FRED value we may use is from the previous Fed business day.
+FED_BUSINESS_DAY = CustomBusinessDay(calendar=USFederalHolidayCalendar())
+FRED_LAG_DAYS = 1
 
 # CBOE computes these indexes, so its own files are the authoritative history
 CBOE_URL = "https://cdn.cboe.com/api/global/us_indices/daily_prices/{name}_History.csv"
@@ -140,4 +150,35 @@ def align_spy_and_cboe():
         daily[column] = daily[column].ffill(limit=1)
         print(f"{column}: forward-filled {before - daily[column].isna().sum()} day(s)")
 
+    return daily
+
+
+def load_fred_lagged(series):
+    df = pd.read_csv(RAW_DIR / f"{series.lower()}.csv", index_col=0, parse_dates=True)
+    values = df[series].dropna()  # bond-market holidays have no value
+    values = values[values.index >= "2003-01-01"]  # older history isn't needed
+
+    # Re-date each value to the day it became public. (pandas warns that this
+    # offset isn't vectorized; harmless at a few thousand rows.)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", pd.errors.PerformanceWarning)
+        values.index = values.index + FRED_LAG_DAYS * FED_BUSINESS_DAY
+
+    # When a holiday falls on Saturday, pandas treats Friday as a day off but
+    # the Fed stays open, so Thursday's and Friday's values both land on Monday.
+    # Keep the newer one: it is the latest information public that day.
+    values = values.groupby(level=0).last()
+    return values.rename(series.lower())
+
+
+def build_daily_dataset():
+    daily = align_spy_and_cboe()
+
+    for series in FRED_SERIES:
+        values = load_fred_lagged(series)
+        # For each SPY day, take the latest value already public by then
+        daily[series.lower()] = values.reindex(daily.index, method="ffill")
+
+    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+    daily.to_csv(PROCESSED_DIR / "daily.csv")
     return daily
