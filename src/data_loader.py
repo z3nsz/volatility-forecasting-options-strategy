@@ -9,6 +9,14 @@ RAW_DIR = Path("data/raw")
 CBOE_URL = "https://cdn.cboe.com/api/global/us_indices/daily_prices/{name}_History.csv"
 CBOE_INDEXES = ["VIX", "VIX9D", "VIX3M", "VVIX", "SKEW", "OVX"]
 
+# Saved exactly as FRED publishes them. The 1-business-day publication lag
+# is applied later, when the datasets are aligned.
+FRED_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv?id={series}"
+FRED_SERIES = {
+    "DTB3": "3-month T-bill rate (risk-free rate)",
+    "BAA10Y": "Moody's Baa corporate yield minus 10-year Treasury",
+}
+
 
 def download_spy(start="2004-01-01"):
     # auto_adjust=False keeps both Close and Adj Close: we need the adjusted
@@ -39,3 +47,20 @@ def download_cboe_index(name):
 
 def download_all_cboe():
     return {name: download_cboe_index(name) for name in CBOE_INDEXES}
+
+
+def download_fred_series(series):
+    df = pd.read_csv(
+        FRED_URL.format(series=series),
+        index_col="observation_date",
+        parse_dates=["observation_date"],
+        na_values=".",  # FRED has used "." for days with no value
+    )
+
+    RAW_DIR.mkdir(parents=True, exist_ok=True)
+    df.to_csv(RAW_DIR / f"{series.lower()}.csv")
+    return df
+
+
+def download_all_fred():
+    return {series: download_fred_series(series) for series in FRED_SERIES}
